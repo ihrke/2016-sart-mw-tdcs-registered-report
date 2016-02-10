@@ -1,96 +1,101 @@
 """
+Sustained Attention to Respond Task (SART)
+used in
+"Increasing and decreasing propensity of mind wandering by transcranial direct current stimulation: A registered report"
+
+
+Notes:
+
 Timing works as follows:
 
 1) Determine effective framerate by collecting frame times and averaging
 2) Calculate number of frames for each desired duration
 3) loop for number of frames and call win.flip() in every loop ->
    ensures that each frame has been shown
+
+Author: Matthias Mittner <matthias.mittner@uit.no>
 """
 
-from psychopy import core, visual, gui, data, event, logging, sound
+from psychopy import core, visual, gui, data, event, logging
 from psychopy.tools.filetools import fromFile, toFile
 import time, random, os, sys
 import numpy as np
-#import pylab as pl
+import scipy.stats
+
+def rtruncnorm(n, a, b, mean, sd):
+    """wrap scipy.stats weird parametrization"""
+    na, nb = (a - mean) / sd, (b - mean) / sd
+    return scipy.stats.truncnorm.rvs(na,nb,loc=mean,scale=sd, size=n)
+
+def get_stimuli(nnontargets, ntargets, nprobes):
+    """randomization function (to be called for each half of the exp)"""
+
+    ## first find number of nontargets per block subject to constraints
+    blocks=0
+    while(np.sum(blocks)!=nnontargets):
+        blocks=np.array(np.round(rtruncnorm(ntargets+nprobes, 12, 29, 20, 5.69)), dtype=np.int)
+
+    ## build stimulus array containing which stimulus is being shown (-1 = thought-probe)
+    stimulus=np.zeros(nnontargets+ntargets+nprobes, dtype=np.int)
+    block_end=np.cumsum(blocks)+np.arange(len(blocks)) # indices where blocks end
+    stimulus[block_end[0:len(block_end):2]]=3 # target-stimulus locations
+    stimulus[block_end[1:len(block_end):2]]=-1 # thought-probe locations
+    stimulus[stimulus==0]=np.random.choice([0,1,2,4,5,6,7,8,9], nnontargets, replace=True)
+    return stimulus
 
 ##-----------------------------------------------------------------------
 ## global vars
 ##-----------------------------------------------------------------------
-
 datadir='./data'
 instruction_file="./instructions_no.py"
 debug=False
-stimcolor='white'
+stimcolor='black'
+bgcolor=[]
 detect_dropped_frames=True
 sepchar=","
 fullscreen=False #True
 
-key_left='lctrl'  #'left'
-key_right='right'
+key_response='space'  #'left'
+key_numbers=["1","2","3","4"]
 quit_key='escape'
-valid_keys=[key_left, key_right]
+valid_keys=[key_response]+key_numbers
 
 # durations in s
-dfixcross=.250
-dnumber  =.250
-dblank   =.900
+dnumber  = 1.0
+dblank   = 1.2
 dprobe   = 6.0
 
-ntrials=720
-nprobes=20
-ntotal=ntrials+nprobes
+# per half of experiment
+nnontargets=500
+ntargets=12
+nprobes=12
+ntrials=nnontargets+ntargets+nprobes
+
+# create randomized stimuli
+stimuli_half1 = get_stimuli(nnontargets, ntargets, nprobes)
+stimuli_half2 = get_stimuli(nnontargets, ntargets, nprobes)
+stimuli=np.concatenate((stimuli_half1, stimuli_half2))
+
+# setup training session
 ntraining=20
 ntrials_probe_min=28
 ntrials_probe_max=44
 nstop_block=4
 numbers=[i for i in range(1,10)]
 
-## randomization
-probe_trials=[]
-for i in range(nprobes-1):
-    offset=probe_trials[i-1] if i!=0 else 0
-    probe_trials.append(np.random.randint(low=offset+ntrials_probe_min, high=offset+ntrials_probe_max+1))
-probe_trials.append(ntrials-1)
-probe_trials+=np.arange(1,nprobes+1)
 
-
-trials=np.zeros(ntotal, dtype=np.int)
-trials[probe_trials]=-1
-
-# stop-trials
-for i,last in enumerate(probe_trials):
-    first=probe_trials[i-1]+1 if i!=0 else 0
-    stop=np.random.choice(np.arange(first,last), nstop_block, replace=False)
-    trials[stop]=3
-
-## rest is random
-# random 
-#trials[trials==0]=np.random.choice([1,2,4,5,6,7,8,9], ntrials-nprobes*nstop_block, replace=True)
-# random permutation
-trials[trials==0]=np.random.permutation(np.concatenate( [ [i]*((ntrials-nprobes*nstop_block)/8) for i in [1,2,4,5,6,7,8,9]]))
-
-print "nstop  =", np.sum(trials==3)
-print "nprobes=", np.sum(trials==-1)
-for i in [1,2,4,5,6,7,8,9]:
-    print "n(%i)=%i"%(i, np.sum(trials==i))
-#pl.plot( trials, '-o')
-#pl.ylim(-1.1, 9.1)
-#pl.show()
-#core.exit()
-
-    
 ##-----------------------------------------------------------------------
 ## setup config
 ##-----------------------------------------------------------------------
 if not os.path.exists(datadir):
     print "> creating ", datadir
     os.makedirs(datadir)
-    
+
 try:#try to get a previous parameters file
     expinfo = fromFile(os.path.join(datadir, 'last_params.pickle'))
 except:#if not there then use a default set
     expinfo = {'subject_id':'', 'session':'', 'condition':''}
-    
+
 expinfo['date']= data.getDateStr() #add the current time
 
 instr={}
@@ -104,7 +109,7 @@ if not debug:
         toFile(os.path.join(datadir, 'last_params.pickle'), expinfo)#save params to file for next time
     else:
         core.quit()#the user hit cancel so exit
-    
+
 #make a text file to save data
 fname = os.path.join('./data/%03i_%s_%s.csv'%(int(expinfo['subject_id']),
                                               expinfo['session'], expinfo['date']))
@@ -147,7 +152,7 @@ fclock = core.Clock() # frame-clock
 
 def logdata(**kwargs):
     data={'time':eclock.getTime(), 'condition':-1, 'trial':-1, 'type':-1, 'response':-1,
-          'RT':-1.0, 'number':-1, 'nresponses':0, 
+          'RT':-1.0, 'number':-1, 'nresponses':0,
           'time_fixcross':-1, 'time_number':-1, 'time_blank':-1, 'time_probe':-1}
     data.update(kwargs)
     datafile.write(sepchar.join([str(data[field]) for field in datafields])+"\n")
@@ -171,7 +176,7 @@ class ProbeStim:
         self.arrow_v[:,1]+=ypad+.01
         self.ticks=ticks
         self.arrow=visual.ShapeStim(win, vertices=self.arrow_v, fillColor=stimcolor, units='norm')
-                
+
         self.init_random()
 
         self.elements=[line]+poss+lab
@@ -179,8 +184,8 @@ class ProbeStim:
     def init_random(self):
         ## initialize to either 0 or nposs-1
         initial_pos=np.random.choice([0,self.nposs-1])
-        self.set_arrow(initial_pos)        
-        
+        self.set_arrow(initial_pos)
+
     def set_arrow(self, pos):
         self.current_pos=pos
         v=self.arrow_v.copy()
@@ -192,27 +197,27 @@ class ProbeStim:
             return
         else:
             self.set_arrow(self.current_pos-1)
-            
+
     def arrow_right(self):
         if self.current_pos==self.nposs-1:
             return
         else:
             self.set_arrow(self.current_pos+1)
-    
+
     def draw(self):
         for el in self.elements:
             el.draw()
         self.arrow.draw()
 
-fixcross=visual.TextStim(win, pos=[0,0],text="+", units='norm', height=0.2, 
+fixcross=visual.TextStim(win, pos=[0,0],text="+", units='norm', height=0.2,
                         alignHoriz='center', alignVert='center', color=stimcolor)
-number=visual.TextStim(win, pos=[0,0],text="", units='norm', height=0.3, 
+number=visual.TextStim(win, pos=[0,0],text="", units='norm', height=0.3,
                         alignHoriz='center', alignVert='center', color=stimcolor)
 probe=ProbeStim(win)
 
 if detect_dropped_frames:
     win.setRecordFrameIntervals(True)
-    win._refreshThreshold=fint+0.004 
+    win._refreshThreshold=fint+0.004
     #set the log module to report warnings to the std output window (default is errors only)
     logging.console.setLevel(logging.WARNING)
 
@@ -241,13 +246,13 @@ def show_trial(num):
     fclock.reset()
     for i in range(fblank):
         win.flip()
-        keys=event.getKeys()           
+        keys=event.getKeys()
         if set(valid_keys) & set(keys):
             if stats['nresponses']==0:
                 stats['response']=1
                 stats['RT']=fclock.getTime()+stats['time_number']
             stats['nresponses']+=1
-            
+
     stats['time_blank']=fclock.getTime()
     return stats
 
@@ -259,7 +264,7 @@ def show_probe():
 
     # set probe to either on- or off-task
     probe.init_random()
-    
+
     fclock.reset()
     for i in range(fprobe):
         probe.draw()
@@ -286,17 +291,12 @@ def show_instruction(screen):
         win.flip()
         r=event.waitKeys()[0]
     return r
-    
+
 
 ##-----------------------------------------------------------------------
 ## instructions
 ##-----------------------------------------------------------------------
 pad=0.1
-
-sync_sound=sound.Sound(800, secs=0.2)
-stats={'condition':'sync', 'trial':0}
-sync_sound.play()
-logdata(**stats)
 
 for screen in instructions['welcome']:
     show_instruction(screen)
@@ -305,23 +305,16 @@ if not debug:
     show_probe()
     show_instruction(instructions['probetraining'][0])
     while True:
-        show_probe()    
+        show_probe()
         k=show_instruction(instructions['probetraining'][1])
         if k==key_left:
             continue
         else:
             break
-    
+
 ##-----------------------------------------------------------------------
 ## training
 ##-----------------------------------------------------------------------
-
-sync_sound=sound.Sound(800, secs=0.2)
-stats={'condition':'sync', 'trial':0}
-sync_sound.play()
-logdata(**stats)
-
-
 for screen in instructions['training']:
     show_instruction(screen)
 
@@ -336,7 +329,7 @@ for trial in range(1,ntraining+2):
         res=show_trial(num)
     stats.update(res)
     logdata(**stats)
-    
+
 
 ##-----------------------------------------------------------------------
 ## full experiment
@@ -377,6 +370,4 @@ if True:
     print "Content of datafile %s"%fname
     print "---------------------------------"
     print open(fname).read()
-    print "---------------------------------"    
-
-
+    print "---------------------------------"
